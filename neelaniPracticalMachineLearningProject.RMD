@@ -1,0 +1,227 @@
+---
+title: "Practical Machine Learning Projcet"
+author: "neelani"
+date: "May 28, 2017"
+output:
+  html_document: default
+  pdf_document: default
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Project Background
+
+Using devices such as Jawbone Up, Nike FuelBand, and Fitbit it is now possible to collect a large amount of data about personal activity relatively inexpensively. In this project, the goal will be to use data from accelerometers on the belt, forearm, arm, and dumbell of 6 participants. This exercise is to predict the barbell lifts done correctly and incorrectly in 5 different ways. More information is available from the website here: http://groupware.les.inf.puc-rio.br/har (see the section on the Weight Lifting Exercise Dataset).
+
+
+## Data 
+
+The training data for this project are available here:
+https://d396qusza40orc.cloudfront.net/predmachlearn/pml-training.csv
+
+The test data are available here:
+https://d396qusza40orc.cloudfront.net/predmachlearn/pml-testing.csv
+
+The data for this project come from this source: http://groupware.les.inf.puc-rio.br/har. 
+
+
+## Model Design Approach
+
+To determine the best prediction model, it will be always better to build few models with different configurations and pick the best one. In this exercise, we will be building Linear Discriminant Analysis(LDA), Decision Tree and Random Forest Model to select the best one.
+
+### Load the required libraries 
+
+```{r libary}
+library(foreach)
+library(lattice)
+library(ggplot2)
+library(MASS)
+library(rpart)
+library(parallel)
+library(iterators)
+library(doParallel) 
+library(caret)
+library(randomForest)
+```
+
+### Set the environment for parallelism
+
+```{r parallel}
+## Clear the Global Environment
+rm(list=ls())
+wd <- getwd()
+
+# Calculate the number of cores to run the process in parallel mode
+no_cores <- detectCores() - 1
+```
+
+### Download the required files
+
+```{r download}
+downloadFile <- "pml_training.csv"
+if (!file.exists(downloadFile)) {
+  url <- "https://d396qusza40orc.cloudfront.net/predmachlearn/pml-training.csv"
+  download.file(url, destfile = downloadFile)
+}
+trainData <- read.csv(downloadFile, na.strings = c("NA","#DIV/0!",""))
+
+downloadFile <- "pml_testing.csv"
+if (!file.exists(downloadFile)) {
+  url <- "https://d396qusza40orc.cloudfront.net/predmachlearn/pml-testing.csv"
+  download.file(url, destfile = downloadFile)
+}
+testData <- read.csv(downloadFile, na.strings = c("NA","#DIV/0!",""))
+
+```
+
+### Cleanup the training data by removing NA, near zero and no-value-add attributes
+
+```{r dataCleanup}
+trainData <- trainData[, -(1:7)]
+testData  <- testData[, -(1:7)]
+
+## Remove near zero value columns                      
+nzv <- nearZeroVar(trainData, saveMetrics = TRUE)
+trainData <- trainData[, -nzv$nzv == FALSE]
+
+# remove variables that are almost always NA
+nas <- sapply(trainData, function(x) mean(is.na(x))) > 0.95
+trainData <- trainData[, nas==FALSE]
+
+
+## Align the columns of test data similar to train data set
+cnames <- colnames(trainData)
+testData <- testData[, cnames[-53]]
+```
+
+### Split the training set data for cross validation
+
+```{r splitData}
+# Divide the training data into a two sets for trainig and cross validation
+set.seed(12345) 
+splitData <- createDataPartition(trainData$classe, p=0.7,list=FALSE)
+trainDataSet1 <- as.data.frame(trainData[splitData,])
+trainDataSet2 <- as.data.frame(trainData[-splitData,])
+
+# Set the trainControl parameters for the 5 fold cross validation
+control <- trainControl(method = "cv", number = 5)
+```
+
+### Build Linear Discriminant Analysis (LDA) Model
+
+Build Linear Discriminant Analysis (LDA) Model, apply the LDA to trainingDataSet1 and print the confusion matrix
+
+```{r ldaModel}
+# Create the Linear Discriminant Analysis (LDA) in Paralel mode
+
+# Initiate cluster
+cl <- makeCluster(no_cores)
+registerDoParallel(cl)
+
+ldaModelFit <- train(classe ~ ., 
+                    data = trainDataSet1,
+                    method = "lda",
+                    trcontrol = control)
+stopCluster(cl)
+
+
+# Save the LDA Model 
+save(ldaModelFit, file = "LDA_modelFit.RData")
+
+# Apply the LDA to training Data Set 1 and validate it using confusion matrix
+predictSet1 <- predict(ldaModelFit, trainDataSet1)
+confusionMatrix(predictSet1, trainDataSet1$classe)
+
+```
+
+### Build Desision Tree Model
+
+Build Desision Tree Model, apply the model to trainingDataSet1 and print the confusion matrix
+
+```{r decisionTreeModel}
+# Create the Decision Tree Model in Paralel mode
+
+# Initiate cluster
+cl <- makeCluster(no_cores)
+registerDoParallel(cl)
+
+dtModelFit <- train(classe ~ ., 
+                    data = trainDataSet1,
+                    method = "rpart")
+stopCluster(cl)
+
+
+# Save the Decision Tree Model 
+save(dtModelFit, file = "DecisionTree_modelFit.RData")
+
+# Apply the Decision Tree Model to training Data Set 1 and validate it using confusion matrix
+predictSet1 <- predict(dtModelFit, trainDataSet1)
+confusionMatrix(predictSet1, trainDataSet1$classe)
+
+```
+
+### Build Random Forest Model
+
+Build Random Forest Model, apply the model to trainingDataSet1 
+
+```{r randomForestModel}
+# Create the Random Forest Model in Paralel mode
+
+modelFile <- "RandonForest_modelFit.RData"
+
+if (!file.exists(modelFile)) {
+  # Initiate cluster
+  cl <- makeCluster(no_cores)
+  registerDoParallel(cl)
+  
+  rfModelFit <- train(classe ~ ., 
+                      data = trainDataSet1,
+                      method = "rf",
+                      trcontrol = control)
+  stopCluster(cl)
+
+  # Save the Random Forest Model 
+  save(rfModelFit, file = "RandonForest_modelFit.RData")
+} else {
+  rfModelFit <-get(load(paste(wd, modelFile, sep = "/")))
+}
+
+# Apply the Random Forest Model to training Data Set 1 and validate it using confusion matrix
+predictSet1 <- predict(rfModelFit, trainDataSet1)
+confusionMatrix(predictSet1, trainDataSet1$classe)
+```
+
+Since Random Forest model is predicting with higher accuracy then other models, lets predict trainingDataSet2 to validate the results
+
+```{r }
+# Apply the Random Forest Model to training Data Set 2 and validate it using confusion matrix
+predictSet2 <- predict(rfModelFit, trainDataSet2)
+confusionMatrix(predictSet2, trainDataSet2$classe)
+```
+
+### Conclusion
+
+Out of the three models, Random Forest model prediction is the best with 99% of accuracy, sensitivity and specificity. Use the Random Forest model to predict the give test data
+
+```{r validateModel}
+## Test the model with the given test data 
+predictTestData <- predict(rfModelFit, testData)
+predictTestData
+
+# create function to write predictions to files
+write_files <- function(x) {
+  n <- length(x)
+  for(i in 1:n) {
+    filename <- paste0("problem_id_", i, ".txt")
+    write.table(x[i], file=filename, quote=F, row.names=F, col.names=F)
+  }
+}
+
+# create prediction files to submit
+write_files(predictTestData)
+```
+
+
+
